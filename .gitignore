@@ -1,0 +1,12 @@
+# Binaries
+/bin
+*.exe
+*.test
+
+# Database files
+*.log
+*.sst
+*.db
+
+# OS specific
+.DS_Store
