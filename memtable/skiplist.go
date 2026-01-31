@@ -3,6 +3,7 @@ package memtable
 import (
 	"bytes"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type SkipList struct {
 	Level int // Current max level in the list
 	Size  int
 	rand  *rand.Rand // For randomness
+	mu    sync.RWMutex
 }
 
 func NewSkipList() *SkipList {
@@ -45,6 +47,9 @@ func (sl *SkipList) randomLevel() int {
 }
 
 func (sl *SkipList) Put(key, value []byte) {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+
 	// Array to track the prev node at each level
 	update := make([]*Node, MaxLevel)
 	current := sl.Head
@@ -93,6 +98,9 @@ func (sl *SkipList) Put(key, value []byte) {
 }
 
 func (sl *SkipList) Get(key []byte) ([]byte, bool) {
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+
 	current := sl.Head
 
 	// Travel down from the highest level
