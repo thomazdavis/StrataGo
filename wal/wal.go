@@ -53,3 +53,45 @@ func (w *WAL) WriteEntry(key, value []byte) error {
 func (w *WAL) Close() error {
 	return w.file.Close()
 }
+
+func (w *WAL) Recover() (map[string][]byte, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	header := make([]byte, 8)
+	data := make(map[string][]byte)
+
+	file, err := os.Open(w.file.Name())
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	for {
+		_, err := file.Read(header)
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			return nil, err
+		}
+
+		keySize := binary.LittleEndian.Uint32(header[0:4])
+		valSize := binary.LittleEndian.Uint32(header[4:8])
+
+		key := make([]byte, keySize)
+		_, err = file.Read(key)
+		if err != nil {
+			return nil, err
+		}
+
+		value := make([]byte, valSize)
+		_, err = file.Read(value)
+		if err != nil {
+			return nil, err
+		}
+
+		data[string(key)] = value
+	}
+	return data, nil
+}
