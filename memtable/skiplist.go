@@ -27,6 +27,10 @@ type SkipList struct {
 	mu    sync.RWMutex
 }
 
+type Iterator struct {
+	current *Node
+}
+
 func NewSkipList() *SkipList {
 	return &SkipList{
 		Head: &Node{
@@ -117,4 +121,26 @@ func (sl *SkipList) Get(key []byte) ([]byte, bool) {
 	}
 
 	return nil, false
+}
+
+// Creates a standard iterator starting at the head
+func (sl *SkipList) NewIterator() *Iterator {
+	return &Iterator{current: sl.Head}
+}
+
+// Next moves the iterator forward. Returns false if we reached the end.
+func (it *Iterator) Next() bool {
+	if it.current.Next[0] != nil {
+		it.current = it.current.Next[0]
+		return true
+	}
+	return false
+}
+
+func (it *Iterator) Key() []byte {
+	return it.current.Key
+}
+
+func (it *Iterator) Value() []byte {
+	return it.current.Value
 }
