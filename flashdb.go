@@ -1,6 +1,7 @@
 package flashdb
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,5 +92,39 @@ func (db *FlashDB) Close() error {
 	for _, r := range db.sstReaders {
 		r.Close()
 	}
+	return nil
+}
+
+func (db *FlashDB) Flush() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	sstName := fmt.Sprintf("data_%d.sst", len(db.sstReaders)+1)
+	sstPath := filepath.Join(db.dataDir, sstName)
+
+	builder, err := sstable.NewBuilder(sstPath)
+	if err != nil {
+		return err
+	}
+	if err := builder.Flush(db.activeMemtable); err != nil {
+		return err
+	}
+
+	reader, err := sstable.NewReader(sstPath)
+	if err != nil {
+		return err
+	}
+	db.sstReaders = append(db.sstReaders, reader)
+
+	db.wal.Close()
+	os.Remove(filepath.Join(db.dataDir, "wal.log"))
+	newWal, err := wal.NewWAL(filepath.Join(db.dataDir, "wal.log"))
+	if err != nil {
+		return err
+	}
+	db.wal = newWal
+
+	db.activeMemtable = memtable.NewSkipList()
+
 	return nil
 }

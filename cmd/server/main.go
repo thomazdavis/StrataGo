@@ -19,7 +19,7 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("FlashDB Shell")
-	fmt.Println("Commands: SET <key> <val> | GET <key> | EXIT")
+	fmt.Println("Commands: SET <key> <val> | GET <key> | FLUSH | EXIT")
 
 	for {
 		fmt.Print("flashdb> ")
@@ -53,6 +53,14 @@ func main() {
 				fmt.Printf("\"%s\"\n", string(val))
 			} else {
 				fmt.Println("(nil)")
+			}
+
+		case "FLUSH":
+			fmt.Println("Flushing memtable to disk...")
+			if err := db.Flush(); err != nil {
+				fmt.Printf("Error flushing: %v\n", err)
+			} else {
+				fmt.Println("OK")
 			}
 
 		case "EXIT":
