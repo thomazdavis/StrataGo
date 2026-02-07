@@ -2,13 +2,17 @@ package wal
 
 import (
 	"encoding/binary"
+	"hash/crc32"
+	"io"
 	"os"
 	"sync"
 )
 
 type WAL struct {
-	file *os.File
-	mu   sync.Mutex
+	file           *os.File
+	mu             sync.Mutex
+	path           string
+	sequenceNumber uint64
 }
 
 func NewWAL(path string) (*WAL, error) {
@@ -16,7 +20,9 @@ func NewWAL(path string) (*WAL, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &WAL{file: file}, nil
+	return &WAL{
+		file: file, path: path,
+	}, nil
 }
 
 // WriteEntry saves a Key-Value pair to the log.
@@ -25,10 +31,20 @@ func (w *WAL) WriteEntry(key, value []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	w.sequenceNumber++
+
+	// Calculate checksum over key+value
+	h := crc32.NewIEEE()
+	h.Write(key)
+	h.Write(value)
+	checksum := h.Sum32()
+
 	// Calculate sizes
-	var buf [8]byte
-	binary.LittleEndian.PutUint32(buf[0:4], uint32(len(key)))
-	binary.LittleEndian.PutUint32(buf[4:8], uint32(len(value)))
+	var buf [20]byte
+	binary.LittleEndian.PutUint64(buf[0:8], w.sequenceNumber)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(key)))
+	binary.LittleEndian.PutUint32(buf[12:16], uint32(len(value)))
+	binary.LittleEndian.PutUint32(buf[16:20], checksum)
 
 	// Write the Header
 	if _, err := w.file.Write(buf[:]); err != nil {
@@ -51,44 +67,72 @@ func (w *WAL) WriteEntry(key, value []byte) error {
 
 // Close safely closes the file handle
 func (w *WAL) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.file.Close()
+}
+
+func (w *WAL) Path() string {
+	return w.path
 }
 
 func (w *WAL) Recover() (map[string][]byte, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	header := make([]byte, 8)
+	header := make([]byte, 20) // SeqNum(8) + KeySize(4) + ValSize(4) + Checksum(4)
 	data := make(map[string][]byte)
 
-	file, err := os.Open(w.file.Name())
+	file, err := os.Open(w.path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return data, nil
+		}
 		return nil, err
 	}
 	defer file.Close()
 
 	for {
-		_, err := file.Read(header)
-		if err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			return nil, err
+		n, err := file.Read(header)
+		if err == io.EOF {
+			break
+		}
+		if err != nil || n < 20 {
+			// Partial header - likely last write was incomplete due to crash
+			// Stop recovery here
+			break
 		}
 
-		keySize := binary.LittleEndian.Uint32(header[0:4])
-		valSize := binary.LittleEndian.Uint32(header[4:8])
+		seqNum := binary.LittleEndian.Uint64(header[0:8])
+		keySize := binary.LittleEndian.Uint32(header[8:12])
+		valSize := binary.LittleEndian.Uint32(header[12:16])
+		expectedChecksum := binary.LittleEndian.Uint32(header[16:20])
 
 		key := make([]byte, keySize)
-		_, err = file.Read(key)
+		n, err = file.Read(key)
+		if err == io.EOF || n < int(keySize) {
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
 
 		value := make([]byte, valSize)
-		_, err = file.Read(value)
+		n, err = file.Read(value)
+		if err == io.EOF || n < int(valSize) {
+			break
+		}
 		if err != nil {
 			return nil, err
+		}
+
+		actualChecksum := crc32.ChecksumIEEE(append(key, value...))
+		if actualChecksum != expectedChecksum {
+			break
+		}
+
+		if seqNum > w.sequenceNumber {
+			w.sequenceNumber = seqNum
 		}
 
 		data[string(key)] = value
