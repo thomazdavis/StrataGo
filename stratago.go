@@ -106,21 +106,50 @@ func (db *StrataGo) Get(key []byte) ([]byte, bool) {
 	defer db.mu.RUnlock()
 
 	if val, found := db.activeMemtable.Get(key); found {
+		if val == nil {
+			return nil, false
+		}
 		return val, true
 	}
 
 	if db.immutableMemtable != nil {
 		if val, found := db.immutableMemtable.Get(key); found {
+			if val == nil {
+				return nil, false
+			}
 			return val, true
 		}
 	}
 
 	for i := len(db.sstReaders) - 1; i >= 0; i-- {
 		if val, found := db.sstReaders[i].Get(key); found {
+			if len(val) == 0 {
+				return nil, false
+			}
 			return val, true
 		}
 	}
 	return nil, false
+}
+
+// Delete marks a key as deleted by inserting a tombstone
+func (db *StrataGo) Delete(key []byte) error {
+
+	// Writing the deletion to the WAL with value nil
+	if err := db.wal.WriteEntry(key, nil); err != nil {
+		return err
+	}
+
+	db.mu.Lock()
+	db.activeMemtable.Put(key, nil)
+
+	needsFlush := db.activeMemtable.SizeBytes >= DefaultMemtableThreshold
+	if needsFlush && !db.isFlushing {
+		go db.Flush()
+	}
+	db.mu.Unlock()
+
+	return nil
 }
 
 func (db *StrataGo) Close() error {

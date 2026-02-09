@@ -104,3 +104,32 @@ func TestStrataGo_AutoFlush(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, value, val)
 }
+
+func TestStrataGo_Delete(t *testing.T) {
+	dataDir := "test_delete"
+	defer os.RemoveAll(dataDir)
+
+	db, _ := Open(dataDir)
+
+	key := []byte("user:1")
+	db.Put(key, []byte("Thomas"))
+
+	db.Delete(key)
+	_, found := db.Get(key)
+	assert.False(t, found, "Key should be deleted")
+
+	db.Put(key, []byte("Davis"))
+	db.Delete(key)
+	db.Flush()
+
+	_, found = db.Get(key)
+	assert.False(t, found, "Key should stay deleted after flush")
+
+	// Test delete survives a restart
+	db.Close()
+	db2, _ := Open(dataDir)
+	defer db2.Close()
+
+	_, found = db2.Get(key)
+	assert.False(t, found, "Key should stay deleted after restart")
+}

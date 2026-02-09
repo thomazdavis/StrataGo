@@ -55,6 +55,17 @@ func main() {
 				fmt.Println("(nil)")
 			}
 
+		case "DELETE":
+			if len(parts) < 2 {
+				fmt.Println("Usage: DELETE <key>")
+				continue
+			}
+			if err := db.Delete([]byte(parts[1])); err != nil {
+				fmt.Printf("Error deleting: %v\n", err)
+			} else {
+				fmt.Println("OK")
+			}
+
 		case "FLUSH":
 			fmt.Println("Flushing memtable to disk...")
 			if err := db.Flush(); err != nil {
