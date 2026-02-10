@@ -68,3 +68,35 @@ func (r *Reader) Get(searchKey []byte) ([]byte, bool) {
 	}
 	return nil, false
 }
+
+func (r *Reader) Path() string {
+	return r.file.Name()
+}
+
+// ReadAll retrieves all key-value pairs from the SSTable file.
+func (r *Reader) ReadAll() map[string][]byte {
+	r.file.Seek(0, 0)
+	data := make(map[string][]byte)
+	for {
+		var keySize, valSize uint32
+		if err := binary.Read(r.file, binary.LittleEndian, &keySize); err != nil {
+			break
+		}
+		if err := binary.Read(r.file, binary.LittleEndian, &valSize); err != nil {
+			break
+		}
+
+		key := make([]byte, keySize)
+		if _, err := io.ReadFull(r.file, key); err != nil {
+			break
+		}
+
+		val := make([]byte, valSize)
+		if _, err := io.ReadFull(r.file, val); err != nil {
+			break
+		}
+
+		data[string(key)] = val
+	}
+	return data
+}

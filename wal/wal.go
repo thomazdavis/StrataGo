@@ -93,14 +93,8 @@ func (w *WAL) Recover() (map[string][]byte, error) {
 	defer file.Close()
 
 	for {
-		n, err := file.Read(header)
-		if err == io.EOF {
-			break
-		}
-		if err != nil || n < 20 {
-			// Partial header - likely last write was incomplete due to crash
-			// Stop recovery here
-			break
+		if _, err := io.ReadFull(file, header); err != nil {
+			break // EOF or partial header
 		}
 
 		seqNum := binary.LittleEndian.Uint64(header[0:8])
@@ -109,25 +103,16 @@ func (w *WAL) Recover() (map[string][]byte, error) {
 		expectedChecksum := binary.LittleEndian.Uint32(header[16:20])
 
 		key := make([]byte, keySize)
-		n, err = file.Read(key)
-		if err == io.EOF || n < int(keySize) {
+		if _, err := io.ReadFull(file, key); err != nil {
 			break
-		}
-		if err != nil {
-			return nil, err
 		}
 
 		value := make([]byte, valSize)
-		n, err = file.Read(value)
-		if err == io.EOF || n < int(valSize) {
+		if _, err := io.ReadFull(file, value); err != nil {
 			break
 		}
-		if err != nil {
-			return nil, err
-		}
 
-		actualChecksum := crc32.ChecksumIEEE(append(key, value...))
-		if actualChecksum != expectedChecksum {
+		if crc32.ChecksumIEEE(append(key, value...)) != expectedChecksum {
 			break
 		}
 

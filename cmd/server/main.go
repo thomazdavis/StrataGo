@@ -19,7 +19,7 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("StrataGo Shell")
-	fmt.Println("Commands: SET <key> <val> | GET <key> | FLUSH | EXIT")
+	fmt.Println("Commands: SET <key> <val> | GET <key> | DELETE <key> | FLUSH | LISTALL | EXIT")
 
 	for {
 		fmt.Print("stratago> ")
@@ -72,6 +72,41 @@ func main() {
 				fmt.Printf("Error flushing: %v\n", err)
 			} else {
 				fmt.Println("OK")
+			}
+
+		case "LISTALL":
+			fmt.Println("--- STRATAGO FULL LAYER INSPECTION ---")
+
+			// Active Memtable
+			active := db.GetActiveContents()
+			fmt.Printf("[Active Memtable] (%d keys)\n", len(active))
+			for k, v := range active {
+				fmt.Printf("  %s: \"%s\"\n", k, string(v))
+			}
+
+			// Immutable Memtable (Background Flush)
+			immut := db.GetImmutableContents()
+			if immut != nil {
+				fmt.Printf("[Immutable Memtable] (%d keys)\n", len(immut))
+				for k, v := range immut {
+					fmt.Printf("  %s: \"%s\"\n", k, string(v))
+				}
+			}
+
+			// WAL (On-disk)
+			walData, _ := db.GetWAL().Recover()
+			fmt.Printf("[WAL: %s] (%d entries)\n", db.GetWAL().Path(), len(walData))
+			for k, v := range walData {
+				fmt.Printf("  %s: \"%s\"\n", k, string(v))
+			}
+
+			// SSTables
+			sstables := db.GetSSTableContents()
+			for path, contents := range sstables {
+				fmt.Printf("[SSTable: %s] (%d keys)\n", path, len(contents))
+				for k, v := range contents {
+					fmt.Printf("  %s: \"%s\"\n", k, string(v))
+				}
 			}
 
 		case "EXIT":
