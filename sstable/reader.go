@@ -28,6 +28,9 @@ func (r *Reader) Close() error {
 
 // Get searches for a key in the SSTable
 func (r *Reader) Get(searchKey []byte) ([]byte, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	_, err := r.file.Seek(0, 0)
 	if err != nil {
 		return nil, false
