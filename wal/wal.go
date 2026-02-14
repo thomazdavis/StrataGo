@@ -26,7 +26,7 @@ func NewWAL(path string) (*WAL, error) {
 }
 
 // WriteEntry saves a Key-Value pair to the log.
-// Format: [Key Size (4B)] [Value Size (4B)] [Key Bytes] [Value Bytes]
+// Format: [SeqNum (8B)] [Key Size (4B)] [Val Size (4B)] [Checksum (4B)] [Key Bytes] [Value Bytes]
 func (w *WAL) WriteEntry(key, value []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

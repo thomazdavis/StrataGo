@@ -18,8 +18,8 @@ func main() {
 	defer db.Close()
 
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("StrataGo Shell")
-	fmt.Println("Commands: SET <key> <val> | GET <key> | DELETE <key> | FLUSH | LISTALL | EXIT")
+	fmt.Println("\nStrataGo Shell")
+	fmt.Println("Commands: SET <key> <val> | GET <key> | DELETE <key> | FLUSH | PURGE | LISTALL | EXIT")
 
 	for {
 		fmt.Print("stratago> ")
@@ -75,7 +75,7 @@ func main() {
 			}
 
 		case "LISTALL":
-			fmt.Println("\n\n--- STRATAGO FULL LAYER INSPECTION ---")
+			fmt.Println("\n----- STRATAGO FULL LAYER INSPECTION -----")
 
 			// Active Memtable
 			active := db.GetActiveContents()
@@ -95,12 +95,13 @@ func main() {
 
 			// WAL (On-disk)
 			walData, _ := db.GetWAL().Recover()
-			fmt.Printf("\n [WAL: %s] (%d entries)\n", db.GetWAL().Path(), len(walData))
+			fmt.Printf("\n[WAL: %s] (%d entries)\n", db.GetWAL().Path(), len(walData))
 			for k, v := range walData {
 				fmt.Printf("  %s: \"%s\"\n", k, string(v))
 			}
 
 			// SSTables
+			fmt.Printf("\n[SSTables]\n")
 			sstables := db.GetSSTableContents()
 			for path, contents := range sstables {
 				fmt.Printf("\n [SSTable: %s] (%d keys)\n", path, len(contents))
