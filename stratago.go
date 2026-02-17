@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -22,6 +23,11 @@ type StrataGo struct {
 	sstReaders        []*sstable.Reader
 	dataDir           string
 	isFlushing        bool
+}
+
+type sstableInfo struct {
+	path      string
+	timestamp int64
 }
 
 func Open(dataDir string) (*StrataGo, error) {
@@ -68,15 +74,31 @@ func Open(dataDir string) (*StrataGo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read data directory: %w", err)
 	}
-	var readers []*sstable.Reader
+	var sstables []sstableInfo
+
 	for _, f := range files {
 		if strings.HasSuffix(f.Name(), ".sst") {
-			r, err := sstable.NewReader(filepath.Join(dataDir, f.Name()))
-			if err == nil {
-				readers = append(readers, r)
-			}
+			var ts int64
+			fmt.Sscanf(f.Name(), "data_%d.sst", &ts)
+			sstables = append(sstables, sstableInfo{
+				path:      filepath.Join(dataDir, f.Name()),
+				timestamp: ts,
+			})
 		}
 	}
+
+	sort.Slice(sstables, func(i, j int) bool {
+		return sstables[i].timestamp < sstables[j].timestamp
+	})
+
+	var readers []*sstable.Reader
+	for _, sst := range sstables {
+		r, err := sstable.NewReader(sst.path)
+		if err == nil {
+			readers = append(readers, r)
+		}
+	}
+
 	return &StrataGo{
 		activeMemtable: mem,
 		wal:            walLog,
