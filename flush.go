@@ -14,32 +14,45 @@ import (
 func (db *StrataGo) Flush() error {
 	db.mu.Lock()
 
-	if db.activeMemtable.Size == 0 {
+	if db.activeMemtable.Size == 0 && db.immutableMemtable == nil {
 		db.mu.Unlock()
 		return nil
 	}
 
-	// Rotate Memtable and WAL
-	db.immutableMemtable = db.activeMemtable
-	db.activeMemtable = memtable.NewSkipList()
+	// Only rotate if we don't have pending data
+	if db.immutableMemtable == nil {
+		// Rotate Memtable and WAL
+		db.immutableMemtable = db.activeMemtable
+		db.activeMemtable = memtable.NewSkipList()
 
-	newWal, err := wal.NewWAL(filepath.Join(db.dataDir, "wal.log"))
-	if err != nil {
-		db.mu.Unlock()
-		return err
+		oldWAL := db.wal
+		if err := oldWAL.Close(); err != nil {
+			db.activeMemtable = db.immutableMemtable
+			db.immutableMemtable = nil
+			db.mu.Unlock()
+			return err
+		}
+
+		flushingWALPath := filepath.Join(db.dataDir, "wal.log.flushing")
+		if err := os.Rename(filepath.Join(db.dataDir, "wal.log"), flushingWALPath); err != nil {
+			db.activeMemtable = db.immutableMemtable
+			db.immutableMemtable = nil
+			db.mu.Unlock()
+			return err
+		}
+
+		newWal, err := wal.NewWAL(filepath.Join(db.dataDir, "wal.log"))
+		if err != nil {
+			os.Rename(flushingWALPath, filepath.Join(db.dataDir, "wal.log"))
+			db.activeMemtable = db.immutableMemtable
+			db.immutableMemtable = nil
+			db.mu.Unlock()
+			return err
+		}
+
+		db.wal = newWal
 	}
 
-	oldWAL := db.wal
-	if err := oldWAL.Close(); err != nil {
-		newWal.Close()
-		db.mu.Unlock()
-		return err
-	}
-
-	flushingWALPath := filepath.Join(db.dataDir, "wal.log.flushing")
-	os.Rename(filepath.Join(db.dataDir, "wal.log"), flushingWALPath)
-
-	db.wal = newWal
 	db.mu.Unlock()
 
 	sstName := fmt.Sprintf("data_%d.sst", time.Now().UnixNano())
@@ -47,16 +60,30 @@ func (db *StrataGo) Flush() error {
 
 	builder, err := sstable.NewBuilder(sstPath)
 	if err != nil {
-		return db.handleFlushError(err)
+		return db.recoverFromFlushFailure(err)
 	}
 
 	if err := builder.Flush(db.immutableMemtable); err != nil {
-		return db.handleFlushError(err)
+		return db.recoverFromFlushFailure(err)
 	}
 
 	reader, err := sstable.NewReader(sstPath)
 	if err != nil {
-		return db.handleFlushError(err)
+		return err
+	}
+
+	verifyData, err := reader.ReadAll()
+	if err != nil {
+		reader.Close()
+		os.Remove(sstPath)
+		return db.recoverFromFlushFailure(fmt.Errorf("SSTable verification failed: %w", err))
+	}
+
+	expectedSize := db.immutableMemtable.Size
+	if len(verifyData) != expectedSize {
+		reader.Close()
+		os.Remove(sstPath)
+		return db.recoverFromFlushFailure(fmt.Errorf("SSTable size mismatch: expected %d, got %d", expectedSize, len(verifyData)))
 	}
 
 	db.mu.Lock()
@@ -64,21 +91,25 @@ func (db *StrataGo) Flush() error {
 	db.immutableMemtable = nil
 	db.mu.Unlock()
 
-	// Verifying SSTable before deleting WAL
-	verifyData, err := reader.ReadAll()
-	if err != nil {
-		return db.handleFlushError(fmt.Errorf("SSTable verification failed: %w", err))
-	}
-	if len(verifyData) != db.immutableMemtable.Size {
-		return db.handleFlushError(fmt.Errorf("SSTable size mismatch"))
-	}
-
-	os.Remove(flushingWALPath)
+	os.Remove(filepath.Join(db.dataDir, "wal.log.flushing"))
 	return nil
 }
 
-func (db *StrataGo) handleFlushError(err error) error {
+func (db *StrataGo) recoverFromFlushFailure(originalErr error) error {
+	db.mu.RLock()
+	iter := db.immutableMemtable.NewIterator()
+	db.mu.RUnlock()
+
+	for iter.Next() {
+		if err := db.wal.WriteEntry(iter.Key(), iter.Value()); err != nil {
+			fmt.Printf("CRITICAL: Failed to persist to WAL: %v\n", err)
+		}
+	}
+
+	// Clear immutable so we can flush again later
 	db.mu.Lock()
+	db.immutableMemtable = nil
 	db.mu.Unlock()
-	return err
+
+	return fmt.Errorf("flush failed, data preserved: %w", originalErr)
 }

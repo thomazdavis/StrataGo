@@ -226,6 +226,11 @@ func (db *StrataGo) Close() error {
 		return fmt.Errorf("final flush on close failed: %w", err)
 	}
 
+	select {
+	case <-db.flushChan:
+	default:
+	}
+
 	close(db.flushChan)
 	db.wg.Wait() // Wait for any in-progress flush to finish
 
@@ -241,31 +246,13 @@ func (db *StrataGo) Close() error {
 
 // Purge closes the database, deletes all data files, and restarts the engine.
 func (db *StrataGo) Purge() error {
-	db.mu.Lock()
-	if !db.closed {
-		// Drain and close to stop worker cleanly
-		close(db.flushChan)
+	if err := db.Close(); err != nil {
+		return err
 	}
-	db.mu.Unlock()
-
-	db.wg.Wait() // Wait for worker to die
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Close the WAL to release the file lock
-	if err := db.wal.Close(); err != nil {
-		return err
-	}
-
-	// Close all SSTable readers
-	for _, reader := range db.sstReaders {
-		if err := reader.Close(); err != nil {
-			return err
-		}
-	}
-
-	// Wipe the Data Directory
 	if err := os.RemoveAll(db.dataDir); err != nil {
 		return err
 	}
