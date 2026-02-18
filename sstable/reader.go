@@ -9,8 +9,9 @@ import (
 )
 
 type Reader struct {
-	file *os.File
-	mu   sync.Mutex
+	file  *os.File
+	index []IndexEntry
+	mu    sync.Mutex
 }
 
 // Opens an existing SSTable for reading
@@ -19,7 +20,60 @@ func NewReader(filename string) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{file: file}, nil
+	r := &Reader{file: file}
+	if err := r.loadIndex(); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return r, nil
+}
+
+// loadIndex reads the Footer and then the Index Block
+func (r *Reader) loadIndex() error {
+	stat, err := r.file.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := stat.Size()
+
+	if fileSize < 8 { // Footer fixed 8 bytes
+		return nil
+	}
+
+	// Read Footer
+	footer := make([]byte, 8)
+	if _, err := r.file.ReadAt(footer, fileSize-8); err != nil {
+		return err
+	}
+	indexOffset := int64(binary.LittleEndian.Uint64(footer))
+
+	// Read Index block
+	if _, err := r.file.Seek(indexOffset, 0); err != nil {
+		return err
+	}
+
+	var numEntries uint32
+	if err := binary.Read(r.file, binary.LittleEndian, &numEntries); err != nil {
+		return err
+	}
+	r.index = make([]IndexEntry, numEntries)
+
+	for i := 0; i < int(numEntries); i++ {
+		var keyLen uint32
+		if err := binary.Read(r.file, binary.LittleEndian, &keyLen); err != nil {
+			return err
+		}
+		key := make([]byte, keyLen)
+		if _, err := io.ReadFull(r.file, key); err != nil {
+			return err
+		}
+		var offset int64
+		if err := binary.Read(r.file, binary.LittleEndian, &offset); err != nil {
+			return err
+		}
+		r.index[i] = IndexEntry{Key: key, Offset: offset}
+	}
+	return nil
 }
 
 func (r *Reader) Close() error {
@@ -31,7 +85,16 @@ func (r *Reader) Get(searchKey []byte) ([]byte, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	_, err := r.file.Seek(0, 0)
+	startOffset := int64(0)
+	for _, entry := range r.index {
+		if bytes.Compare(entry.Key, searchKey) <= 0 {
+			startOffset = entry.Offset
+		} else {
+			break
+		}
+	}
+
+	_, err := r.file.Seek(startOffset, 0)
 	if err != nil {
 		return nil, false
 	}
@@ -55,20 +118,25 @@ func (r *Reader) Get(searchKey []byte) ([]byte, bool) {
 
 		// Read Key Payload
 		key := make([]byte, keySize)
-		_, err = r.file.Read(key)
-		if err != nil {
+		if _, err := io.ReadFull(r.file, key); err != nil {
 			return nil, false
 		}
 
-		if bytes.Equal(key, searchKey) {
+		cmp := bytes.Compare(key, searchKey)
+
+		if cmp == 0 {
 			val := make([]byte, valSize)
-			_, err = r.file.Read(val)
-			return val, true
-		} else {
-			_, err = r.file.Seek(int64(valSize), 1)
-			if err != nil {
+			if _, err := io.ReadFull(r.file, val); err != nil {
 				return nil, false
 			}
+			return val, true
+		} else if cmp > 0 {
+			return nil, false
+		}
+
+		_, err = r.file.Seek(int64(valSize), 1)
+		if err != nil {
+			return nil, false
 		}
 	}
 	return nil, false
@@ -88,7 +156,22 @@ func (r *Reader) ReadAll() (map[string][]byte, error) {
 	}
 
 	data := make(map[string][]byte)
-	for {
+
+	stat, _ := r.file.Stat()
+	fileSize := stat.Size()
+	limit := fileSize
+
+	if fileSize > 8 {
+		footer := make([]byte, 8)
+		r.file.ReadAt(footer, fileSize-8)
+		limit = int64(binary.LittleEndian.Uint64(footer))
+	}
+
+	// Reset seek
+	r.file.Seek(0, 0)
+	currentPos := int64(0)
+
+	for currentPos < limit {
 		var keySize, valSize uint32
 		if err := binary.Read(r.file, binary.LittleEndian, &keySize); err != nil {
 			if err == io.EOF {
@@ -111,6 +194,7 @@ func (r *Reader) ReadAll() (map[string][]byte, error) {
 		}
 
 		data[string(key)] = val
+		currentPos += int64(8 + keySize + valSize)
 	}
 	return data, nil
 }
