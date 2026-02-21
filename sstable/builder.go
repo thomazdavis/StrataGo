@@ -40,58 +40,51 @@ func NewBuilder(filename string) (*Builder, error) {
 	}, nil
 }
 
-// Flush writes the entire Skiplist to the SSTable file
-func (b *Builder) Flush(skiplist *memtable.SkipList) error {
+// Add inserts a single key-value pair into the SSTable. Keys MUST be inserted in sorted order.
+func (b *Builder) Add(key, val []byte) error {
+	startOffset := b.bytesWritten
 
-	iter := skiplist.NewIterator()
+	if startOffset == 0 || startOffset-b.lastIndexPos >= IndexInterval {
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
 
-	// Iterate through every node
-	for iter.Next() {
-		key := iter.Key()
-		val := iter.Value()
-		startOffset := b.bytesWritten
-
-		if startOffset == 0 || startOffset-b.lastIndexPos >= IndexInterval {
-			keyCopy := make([]byte, len(key))
-			copy(keyCopy, key)
-
-			b.index = append(b.index, IndexEntry{
-				Key:    keyCopy,
-				Offset: startOffset,
-			})
-			b.lastIndexPos = startOffset
-		}
-
-		// Write Key Size (4 bytes)
-		if err := binary.Write(b.file, binary.LittleEndian, uint32(len(key))); err != nil {
-			b.cleanup()
-			return err
-		}
-
-		// Write Value Size (4 bytes)
-		if err := binary.Write(b.file, binary.LittleEndian, uint32(len(val))); err != nil {
-			b.cleanup()
-			return err
-		}
-
-		// Write Key Bytes
-		if _, err := b.file.Write(key); err != nil {
-			b.cleanup()
-			return err
-		}
-
-		if _, err := b.file.Write(val); err != nil {
-			b.cleanup()
-			return err
-		}
-
-		b.bytesWritten += int64(8 + len(key) + len(val))
+		b.index = append(b.index, IndexEntry{
+			Key:    keyCopy,
+			Offset: startOffset,
+		})
+		b.lastIndexPos = startOffset
 	}
+
+	// Write Key Size (4 bytes)
+	if err := binary.Write(b.file, binary.LittleEndian, uint32(len(key))); err != nil {
+		return err
+	}
+
+	// Write Value Size (4 bytes)
+	if err := binary.Write(b.file, binary.LittleEndian, uint32(len(val))); err != nil {
+		return err
+	}
+
+	// Write Key Bytes
+	if _, err := b.file.Write(key); err != nil {
+		return err
+	}
+	if _, err := b.file.Write(val); err != nil {
+		return err
+	}
+
+	b.bytesWritten += int64(8 + len(key) + len(val))
+	return nil
+}
+
+// Finish writes the index and footer, then closes and renames the file.
+func (b *Builder) Finish() error {
 
 	// Index block (sparse index)
 	indexOffset := b.bytesWritten
 	if err := b.writeIndex(); err != nil {
 		b.cleanup()
+		return err
 	}
 
 	// Footer (8 bytes containing the offset of the Index)
@@ -99,23 +92,34 @@ func (b *Builder) Flush(skiplist *memtable.SkipList) error {
 		b.cleanup()
 		return err
 	}
-
 	if err := b.file.Sync(); err != nil {
 		b.cleanup()
 		return err
 	}
-
 	if err := b.file.Close(); err != nil {
 		b.cleanup()
 		return err
 	}
-
 	if err := os.Rename(b.tmpFilename, b.finalFilename); err != nil {
 		b.cleanup()
 		return err
 	}
-
 	return nil
+}
+
+// Flush writes the entire Skiplist to the SSTable file
+func (b *Builder) Flush(skiplist *memtable.SkipList) error {
+
+	iter := skiplist.NewIterator()
+
+	// Iterate through every node
+	for iter.Next() {
+		if err := b.Add(iter.Key(), iter.Value()); err != nil {
+			b.cleanup()
+			return err
+		}
+	}
+	return b.Finish()
 }
 
 func (b *Builder) writeIndex() error {

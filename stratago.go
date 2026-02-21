@@ -23,6 +23,7 @@ type StrataGo struct {
 	sstReaders        []*sstable.Reader
 	dataDir           string
 	flushChan         chan struct{}
+	closeChan         chan struct{}
 	wg                sync.WaitGroup
 	closed            bool
 }
@@ -111,11 +112,13 @@ func Open(dataDir string) (*StrataGo, error) {
 		sstReaders:     readers,
 		dataDir:        dataDir,
 		flushChan:      make(chan struct{}, 1),
+		closeChan:      make(chan struct{}),
 		closed:         false,
 	}
 
-	db.wg.Add(1)
+	db.wg.Add(2) // two worker - flush + compaction
 	go db.flushWorker()
+	go db.compactionWorker()
 
 	return db, nil
 }
@@ -232,6 +235,7 @@ func (db *StrataGo) Close() error {
 	}
 
 	close(db.flushChan)
+	close(db.closeChan)
 	db.wg.Wait() // Wait for any in-progress flush to finish
 
 	db.mu.Lock()
